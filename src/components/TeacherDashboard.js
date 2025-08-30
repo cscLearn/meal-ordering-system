@@ -2,59 +2,64 @@
 
 import React from 'react';
 import { User, Calendar, ShoppingCart, BarChart3, Settings, CheckCircle, Clock, CreditCard, Menu } from 'lucide-react';
-import StudentManagement from './StudentManagement'; // 引入我们拆分好的组件
-import MenuEditor from './MenuEditor'; // 引入我们拆分好的组件
+import StudentManagement from './StudentManagement';
+import MenuEditor from './MenuEditor';
+import { doc, updateDoc } from "firebase/firestore"; // 导入 updateDoc
+import { db } from '../firebase'; // 导入 db
 
 export default function TeacherDashboard(props) {
   const {
-    setCurrentUser,
-    students,
-    // 从 App.js 传入所有需要的 props
-    showStudentManagement, setShowStudentManagement,
-    showMenuEditor, setShowMenuEditor,
-    activeMenu, setActiveMenu,
-    orderingEnabled, setOrderingEnabled,
-    getCurrentMenu,
-    customMenus, setCustomMenus,
-    editingMenu, setEditingMenu,
-    createNewMenu,
-    // 学生管理需要的所有 props
+    setCurrentUser, students, showStudentManagement, setShowStudentManagement,
+    showMenuEditor, setShowMenuEditor, activeMenu, orderingEnabled,
+    getCurrentMenu, customMenus, setCustomMenus, editingMenu, setEditingMenu,
+    // ...其他所有学生管理 props...
     selectedStudents, batchDeleteStudents, setShowBatchAdd, showBatchAdd,
     batchStudentText, setBatchStudentText, batchAddStudents, newStudent,
     setNewStudent, showStudentPassword, setShowStudentPassword, addStudent,
     selectAllStudents, toggleStudentSelection, editingStudent, setEditingStudent,
-    updateStudent, resetStudentPassword, deleteStudent,
-    // 付款状态更新函数
-    updatePaymentStatus
+    updateStudent, resetStudentPassword, deleteStudent, updatePaymentStatus
   } = props;
 
-  // 这是 TeacherDashboard 自己的逻辑
-  const handleMenuChange = (menuType) => {
-    setActiveMenu(menuType);
-    setOrderingEnabled(false);
+  // 【核心修改】这两个函数现在会更新 Firebase
+  const handleMenuChange = async (menuType) => {
+    try {
+      const settingsDocRef = doc(db, "settings", "system");
+      await updateDoc(settingsDocRef, {
+        activeMenu: menuType,
+        orderingEnabled: false // 切换菜单时，总是默认关闭订餐
+      });
+    } catch (error) {
+      console.error("更新激活菜单失败: ", error);
+    }
   };
 
-  const toggleOrdering = () => {
+  const toggleOrdering = async () => {
     if (!activeMenu) {
       alert('请先选择菜单');
       return;
     }
-    setOrderingEnabled(!orderingEnabled);
+    try {
+      const settingsDocRef = doc(db, "settings", "system");
+      await updateDoc(settingsDocRef, {
+        orderingEnabled: !orderingEnabled
+      });
+    } catch (error) {
+      console.error("更新订餐状态失败: ", error);
+    }
   };
 
+  // --- 统计数据计算 (保持原样) ---
   const currentMenu = getCurrentMenu();
   const totalStudents = students.length;
   const totalOrders = students.reduce((acc, student) => acc + Object.values(student.orders || {}).filter(Boolean).length, 0);
   const paidStudents = students.filter(student => student.isPaid).length;
   const unpaidStudents = totalStudents - paidStudents;
-  
   const totalRevenue = students.reduce((total, student) => {
       const studentTotal = currentMenu.reduce((sum, menuItem) => {
           return sum + ((student.orders && student.orders[menuItem.day]) ? menuItem.price : 0);
       }, 0);
       return total + studentTotal;
   }, 0);
-  
   const paidRevenue = students.reduce((total, student) => {
       if (student.isPaid) {
           const studentTotal = currentMenu.reduce((sum, menuItem) => {
@@ -64,16 +69,15 @@ export default function TeacherDashboard(props) {
       }
       return total;
   }, 0);
-
   const unpaidRevenue = totalRevenue - paidRevenue;
 
-
-  // 根据 state 决定显示哪个视图
+  // --- 视图渲染逻辑 ---
   if (showStudentManagement) {
     return (
       <StudentManagement
         students={students}
         setShowStudentManagement={setShowStudentManagement}
+        // ...传递所有学生管理需要的 props...
         selectedStudents={selectedStudents}
         batchDeleteStudents={batchDeleteStudents}
         setShowBatchAdd={setShowBatchAdd}
@@ -105,7 +109,6 @@ export default function TeacherDashboard(props) {
         editingMenu={editingMenu}
         setEditingMenu={setEditingMenu}
         setShowMenuEditor={setShowMenuEditor}
-        createNewMenu={createNewMenu}
       />
     );
   }
@@ -117,9 +120,7 @@ export default function TeacherDashboard(props) {
         <div className="max-w-6xl mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-3">
-              <div className="bg-indigo-100 p-2 rounded-lg">
-                <Settings className="w-6 h-6 text-indigo-600" />
-              </div>
+              <div className="bg-indigo-100 p-2 rounded-lg"> <Settings className="w-6 h-6 text-indigo-600" /> </div>
               <div>
                 <h1 className="text-lg font-semibold text-gray-800">5A班订餐管理系统</h1>
                 <p className="text-sm text-gray-600">老师控制台</p>
@@ -143,7 +144,7 @@ export default function TeacherDashboard(props) {
             <div className="flex items-center space-x-4 mb-4">
               {Object.keys(customMenus).map(menuKey => (
                 <button key={menuKey} onClick={() => handleMenuChange(menuKey)} className={`px-4 py-2 rounded-lg font-medium transition-colors ${activeMenu === menuKey ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
-                  {menuKey === 'menu_A' ? '菜单A' : menuKey === 'menu_B' ? '菜单B' : `菜单${menuKey.split('_')[1] || ''}`}
+                  {menuKey.replace('_', ' ')}
                 </button>
               ))}
               <div className="flex-1"></div>
@@ -160,15 +161,15 @@ export default function TeacherDashboard(props) {
             {activeMenu && (
               <div className="mt-4">
                 <h3 className="font-semibold text-gray-800 mb-3">
-                  当前选择：{activeMenu === 'menu_A' ? '菜单A' : activeMenu === 'menu_B' ? '菜单B' : `菜单${activeMenu.split('_')[1] || ''}`}
+                  当前选择：{activeMenu.replace('_', ' ')}
                 </h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {currentMenu.map((menu, index) => (
+                  {currentMenu.map((item, index) => (
                     <div key={index} className="bg-gray-50 rounded-lg p-3">
-                      <h4 className="font-medium text-gray-800">{menu.dayName}</h4>
-                      <p className="text-sm text-gray-600">{menu.meal}</p>
-                      <p className="text-xs text-gray-500">{menu.description}</p>
-                      <p className="text-sm font-semibold text-indigo-600">RM {menu.price.toFixed(2)}</p>
+                      <h4 className="font-medium text-gray-800">{item.dayName}</h4>
+                      <p className="text-sm text-gray-600">{item.meal}</p>
+                      <p className="text-xs text-gray-500">{item.description}</p>
+                      <p className="text-sm font-semibold text-indigo-600">RM {item.price.toFixed(2)}</p>
                     </div>
                   ))}
                 </div>
@@ -176,6 +177,7 @@ export default function TeacherDashboard(props) {
             )}
           </div>
         </div>
+        {/* ... 统计卡片和订单详情表格的 JSX 保持原样 ... */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
             <div className="bg-white rounded-lg shadow-sm p-6">
               <div className="flex items-center">
@@ -274,7 +276,7 @@ export default function TeacherDashboard(props) {
                         <td className="px-6 py-4 whitespace-nowrap">
                           <div className="text-sm font-medium text-gray-900">{student.name}</div>
                         </td>
-                        <td className="px-6 py-4 whitespace-nowdrap">
+                        <td className="px-6 py-4 whitespace-nowrap">
                           <div className="text-sm text-gray-900">{orderCount} 份</div>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
