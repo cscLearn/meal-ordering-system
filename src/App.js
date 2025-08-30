@@ -2,7 +2,8 @@
 
 import React, { useState, useEffect } from 'react';
 import { db } from './firebase';
-import { collection, getDocs, addDoc, doc, deleteDoc, updateDoc } from "firebase/firestore";
+// 【重要】从 firestore 导入 onSnapshot
+import { collection, getDocs, addDoc, doc, deleteDoc, updateDoc, onSnapshot } from "firebase/firestore";
 
 import LoginScreen from './components/LoginScreen';
 import StudentDashboard from './components/StudentDashboard';
@@ -11,7 +12,7 @@ import TeacherDashboard from './components/TeacherDashboard';
 const TEACHER_PASSWORD = 'teacher123';
 
 export default function App() {
-  // --- 所有 State Hooks 集中声明 ---
+  // --- 所有 State Hooks 保持不变 ---
   const [students, setStudents] = useState([]);
   const [customMenus, setCustomMenus] = useState({});
   const [currentUser, setCurrentUser] = useState(null);
@@ -37,34 +38,41 @@ export default function App() {
   const [showMenuEditor, setShowMenuEditor] = useState(false);
   const [editingMenu, setEditingMenu] = useState(null);
 
-  // --- 从 Firebase 加载所有初始数据 ---
+  // ===================================================================
+  // 【核心修改】使用 onSnapshot 进行实时数据监听
+  // ===================================================================
   useEffect(() => {
-    const fetchData = async () => {
-      // 1. 获取学生数据
-      try {
-        const studentsSnapshot = await getDocs(collection(db, "students"));
-        const studentList = studentsSnapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }));
-        setStudents(studentList);
-      } catch (error) {
-        console.error("从 Firebase 获取学生数据失败:", error);
-      }
+    // 监听 students 集合
+    const studentsCollectionRef = collection(db, "students");
+    const unsubscribeStudents = onSnapshot(studentsCollectionRef, (querySnapshot) => {
+      const studentList = querySnapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }));
+      setStudents(studentList);
+      console.log("实时学生数据已更新:", studentList);
+    }, (error) => {
+      console.error("监听学生数据失败:", error);
+    });
 
-      // 2. 获取菜单数据
-      try {
-        const menusSnapshot = await getDocs(collection(db, "menus"));
-        const menuData = {};
-        menusSnapshot.forEach(doc => {
-          menuData[doc.id] = doc.data().items;
-        });
-        setCustomMenus(menuData);
-      } catch (error) {
-        console.error("从 Firebase 获取菜单数据失败:", error);
-      }
+    // 监听 menus 集合
+    const menusCollectionRef = collection(db, "menus");
+    const unsubscribeMenus = onSnapshot(menusCollectionRef, (querySnapshot) => {
+      const menuData = {};
+      querySnapshot.forEach(doc => {
+        menuData[doc.id] = doc.data().items;
+      });
+      setCustomMenus(menuData);
+      console.log("实时菜单数据已更新:", menuData);
+    }, (error) => {
+      console.error("监听菜单数据失败:", error);
+    });
+
+    // 清理函数：当组件卸载时，取消监听，防止内存泄漏
+    return () => {
+      unsubscribeStudents();
+      unsubscribeMenus();
     };
-    fetchData();
-  }, []);
+  }, []); // 空依赖数组确保监听器只在组件挂载时设置一次
 
-  // --- 辅助与数据操作函数 ---
+  // --- 辅助与数据操作函数 (所有函数保持原样) ---
   const getCurrentMenu = () => activeMenu ? customMenus[activeMenu] : [];
 
   const handleStudentLogin = () => {
@@ -88,8 +96,8 @@ export default function App() {
     if (!newStudent.name.trim()) { alert('请输入学生姓名'); return; }
     try {
       const studentData = { name: newStudent.name.trim(), password: newStudent.password || '123456', orders: {}, isPaid: false };
-      const newDocRef = await addDoc(collection(db, "students"), studentData);
-      setStudents(prev => [...prev, { ...studentData, id: newDocRef.id }]);
+      await addDoc(collection(db, "students"), studentData);
+      // setStudents 不再需要，onSnapshot 会自动更新
       setNewStudent({ name: '', password: '123456' });
     } catch (error) { console.error("添加新学生失败: ", error); }
   };
@@ -97,7 +105,7 @@ export default function App() {
   const updateStudent = async (studentId, updatedData) => {
     try {
       await updateDoc(doc(db, "students", studentId), updatedData);
-      setStudents(prev => prev.map(s => s.id === studentId ? { ...s, ...updatedData } : s));
+      // setStudents 不再需要，onSnapshot 会自动更新
       setEditingStudent(null);
     } catch (error) { console.error("更新学生信息失败: ", error); }
   };
@@ -106,7 +114,7 @@ export default function App() {
     if (window.confirm('确定要永久删除这个学生吗？')) {
       try {
         await deleteDoc(doc(db, "students", studentId));
-        setStudents(prev => prev.filter(s => s.id !== studentId));
+        // setStudents 不再需要，onSnapshot 会自动更新
       } catch (error) { console.error("删除学生失败: ", error); }
     }
   };
@@ -118,10 +126,49 @@ export default function App() {
     }
   };
 
-  const batchAddStudents = async () => { /* ... 保持原样 ... */ };
-  const batchDeleteStudents = async () => { /* ... 保持原样 ... */ };
-  const toggleStudentSelection = (studentId) => { /* ... 保持原样 ... */ };
-  const selectAllStudents = () => { /* ... 保持原样 ... */ };
+  const batchAddStudents = async () => {
+    const lines = batchStudentText.split('\n').filter(line => line.trim());
+    if (lines.length === 0) return;
+    try {
+      // 批量添加依然需要手动处理，因为 onSnapshot 不会一次性返回所有新 ID
+      const addPromises = lines.map(line => {
+        const name = line.trim();
+        if(name) {
+          const studentData = { name, password: '123456', orders: {}, isPaid: false };
+          return addDoc(collection(db, "students"), studentData);
+        }
+        return null;
+      }).filter(Boolean);
+      
+      await Promise.all(addPromises);
+      
+      setBatchStudentText('');
+      setShowBatchAdd(false);
+      alert(`成功添加 ${lines.length} 名学生`);
+    } catch (error) { console.error("批量添加学生失败: ", error); }
+  };
+
+  const batchDeleteStudents = async () => {
+    if (selectedStudents.size === 0) return;
+    if (window.confirm(`确定要删除选中的 ${selectedStudents.size} 名学生吗？`)) {
+      try {
+        const deletePromises = Array.from(selectedStudents).map(id => deleteDoc(doc(db, "students", id)));
+        await Promise.all(deletePromises);
+        // setStudents 和 setSelectedStudents 不再需要，onSnapshot 会自动更新
+        setSelectedStudents(new Set());
+      } catch (error) { console.error("批量删除失败: ", error); }
+    }
+  };
+
+  const toggleStudentSelection = (studentId) => {
+    const newSelected = new Set(selectedStudents);
+    newSelected.has(studentId) ? newSelected.delete(studentId) : newSelected.add(studentId);
+    setSelectedStudents(newSelected);
+  };
+
+  const selectAllStudents = () => {
+    setSelectedStudents(selectedStudents.size === students.length ? new Set() : new Set(students.map(s => s.id)));
+  };
 
   const toggleOrder = async (day) => {
     if (!currentUser) return;
@@ -137,10 +184,7 @@ export default function App() {
     await updateStudent(studentId, { isPaid: !studentToUpdate.isPaid });
   };
   
-  // createNewMenu 现在只在 MenuEditor 内部处理，这里不再需要
-  // const createNewMenu = () => { ... };
-
-  // --- 主渲染逻辑 ---
+  // --- 主渲染逻辑 (保持原样) ---
   if (!currentUser) {
     return (
       <LoginScreen
@@ -179,7 +223,6 @@ export default function App() {
         setCustomMenus={setCustomMenus}
         editingMenu={editingMenu}
         setEditingMenu={setEditingMenu}
-        // createNewMenu 函数现在由 MenuEditor 自己管理，不再从 App.js 传递
         selectedStudents={selectedStudents}
         batchDeleteStudents={batchDeleteStudents}
         setShowBatchAdd={setShowBatchAdd}
